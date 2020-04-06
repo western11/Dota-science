@@ -1,1 +1,3 @@
+The train data is too large for github, here's the link if you want to download it
+
 https://www.kaggle.com/c/dota-2-prediction/overview
