@@ -1,0 +1,385 @@
+---
+title: "DotaScience #2"
+author: "jojoecp"
+date: "4/8/2020"
+output:
+  html_document:
+   toc: true
+   toc_float: true
+   toc_depth: 2
+   theme: flatly
+   highlight: zenburn
+   df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.align = "center")
+
+options(scipen = 999)
+```
+
+For this second part of `DotaScience`, we'll do unsupervised learning: Clustering and Principal Component Analysis (PCA). Dota 2 is a multiplayer online battle arena (MOBA) video game developed and published by Valve. Dota 2 is played in matches between two teams (called Radiant and Dire) of five players, with each team occupying and defending their own separate base on the map. Each of the ten players independently controls a powerful character, known as a `hero`. In this article, we will analyze all of 117 heroes in Dota2 with unsupervised learning i mentioned before.
+![Dota 2 Header](header1.jpg)
+
+# Background {.tabset}
+## Objective
+This project is based on an old `Kaggle` competition. You can found all the datasets and the competition [here](https://www.kaggle.com/c/dota-2-prediction/overview). Well, we will not gonna predict the match winner (I already do that, check previous chapter [here](https://rpubs.com/jojoecp/595932)) but do a deeper analysis with the heroes instead. Is important for you to know this dataset were made one year ago. Thus, **Recent updates of Dota are not represented in this analysis.** However let's hope we can found interesting insight that still related with current meta by do `Clustering` with Kmeans and dimensionality reduction with `PCA`
+
+## Libraries
+You can load the package into your workspace using the library() function
+```{r warning=FALSE, message=FALSE}
+library(dplyr)
+library(data.table)
+library(stringr)
+library(rjson)
+library(ggplot2)
+library(GGally)
+library(dummies)
+library(cowplot)
+library(FactoMineR)
+library(factoextra)
+```
+
+# Let's begin
+
+## Data Import
+[The competition](https://www.kaggle.com/c/dota-2-prediction/overview) provide 5 datasets; test, train, hero_names, item_ids, and submission example. We will use `hero_names.json` dataset.
+```{r warning=FALSE, message=FALSE}
+hero.data <- fromJSON(file = "hero_names.json")
+hero.df <- rbindlist(hero.data)
+```
+
+# Data Wrangling / Pre-process
+## EDA and Feature Engineering
+
+```{r}
+# THe hero are seperated by its roles, i.ll combine all of their role into one row by their id seperated by ,
+hero.df2 <- hero.df %>% group_by(id) %>%
+  summarise(roles.c = paste(roles, collapse = ","))
+
+hero.df <- merge(hero.df[,-c("roles")], hero.df2, by = "id")
+hero.df <- hero.df[!duplicated(hero.df),]
+# take a quick look
+glimpse(hero.df)
+```
+
+first, we remove unused variable
+```{r}
+hero.df <- hero.df %>% select(-c("id","name","cm_enabled","img","icon"))
+# i want to take a second look to our data, i found some NA in glimpse above and i think we need to deal with it first
+# change primary_attr and attack_type to factor
+hero.df[,2:3] <- lapply(hero.df[,2:3], as.factor)
+
+colSums(is.na(hero.df))
+summary(hero.df)
+```
+
+from the summary above we can see that `base_health`, `base_mana`, and `base_mana_regen` only have one value, we'll remove them. `base_health_regen` have 85 NA, we'll change it to 0. And i'll convert roles.c into boolean value just like what i do in previous chapter of [DotaScience](https://rpubs.com/jojoecp/595932)
+
+
+```{r}
+# remove `base_health`, `base_mana`, and `base_mana_regen` from df.
+hero.df <- hero.df %>% select(-c("base_health", "base_mana", "base_mana_regen"))
+# Change NA in base_health_regen to 0
+hero.df$base_health_regen[which(is.na(hero.df$base_health_regen))] <- "0"
+# change it back to numeric
+hero.df$base_health_regen <- as.double(hero.df$base_health_regen)
+```
+
+```{r warning=FALSE}
+hero.df3 <- rbindlist(hero.data)
+hero.df3$roles <- as.factor(hero.df3$roles)
+hero.roles <- dummy.data.frame(hero.df3[,c("id","roles")])
+hero.roles <- hero.roles %>% group_by(id) %>%
+  dplyr::summarise_all(funs(sum))
+
+hero.roles
+```
+
+```{r}
+hero.df.new <- cbind(hero.df, hero.roles)
+# remove roles.c, we dont need it anymore
+hero.df.new <- hero.df.new %>% select(-c("roles.c","id"))
+
+
+# lets re-check our clean data
+colSums(is.na(hero.df.new))
+glimpse(hero.df.new)
+```
+
+from my experience of playing dota (7 years approx) heroes with strength attr tend to have large armor,  higher health and regen and usually melee attack type. Agility heroes have the fastest attack rate and movement speed. And Int heroes has the most mana but lower armor and hp. however thats based on my experience, lets see what data said
+
+```{r}
+bp1 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = base_armor, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "base_armor") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp2 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = base_attack_max, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "max_attack") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp3 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = base_str, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "base_str") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp4 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = base_agi, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "base_agi") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp5 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = base_int, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "base_int") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp6 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = attack_range, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "attack_range") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp7 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = attack_rate, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "attack_rate") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp8 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = move_speed, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "move_speed") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+bp9 <- ggplot(data = hero.df.new, aes(x = primary_attr, y = base_health_regen, fill = primary_attr)) +
+  geom_boxplot(show.legend = F) + theme_bw() + labs(title = "health_regen") + 
+  scale_fill_manual(values = c("green","blue","red"))+ theme(plot.title = element_text(size=10))
+
+plot_grid(bp1,bp2,bp3,bp4,bp5,bp6,bp7,bp8,bp9)
+```
+
+looks like most of my guesses are wrong. highest attack rate are held by str type, most str also have higher move speed, and most agi hero have higher health regen. that's why we need deeper analysis based from data. it might be usefull for profesional players to have detailed knowledge about what heroes they have to use against certain heroes, what heroes are similliar, and what heroes are suitable for certain conditions. 
+
+To solve the problem, we'll do `clustering`. we'll group heroes based on their similarity.
+
+# Clustering (K-means)
+
+k-means only need numeric value, so we'll select only numeric data. We also scale the data because most of the variable have different scale
+```{r}
+# clustering 
+df.num <- hero.df.new %>% select_if(is.numeric)
+# i want to keep on track by each hero
+df.num <- df.num %>% `rownames<-`(hero.df.new$localized_name)
+# scaling
+df.num <- scale(df.num)
+```
+
+
+## Find optimum number of cluster and build cluster
+```{r}
+# build the loop from k=2 until k=15 by 1
+k_values <- seq(2,15,1)
+
+num_k <- length(k_values)
+# make empty table to save k, wss, and btratio
+k.df <- tibble(k = rep(0, num_k), wss = rep(0, num_k), btratio = rep(0, num_k))
+
+# evaluate knn for a bunch of values of k
+for(i in 1:num_k){
+  
+  k <- k_values[i]
+  # build kmeans model from given k in loop start from 2 until 15 k
+  kmn <- kmeans(df.num,i)
+ 
+  # store k values
+  k.df[i, 'k'] <- k
+  # store wss value
+  k.df[i, 'wss'] <- kmn$tot.withinss
+  # store btratio value
+  k.df[i, 'btratio'] <- kmn$betweenss/kmn$totss
+  
+}
+```
+
+```{r}
+# draw the plot from loop
+wss.p <- ggplot(data = k.df, aes(x = k, y = wss)) + geom_point() + geom_line()+
+  labs(title = "Within sum of square")
+
+btratio.p <- ggplot(data = k.df, aes(x = k, y = btratio)) + geom_point() + geom_line()+
+  labs(title = "betweenss/totalss")
+
+plot_grid(wss.p, btratio.p)
+```
+
+For wss plot, we’re looking for a point where diminishing returns start to decrease. And for btratio we also looking for the increase in btratio in not big as the number of K before them. This method is also called `elbow method`. In this case, we'll chose K = 4 to be considered as the best K 
+
+```{r}
+# K-means with k=4
+hero.clus <- kmeans(df.num,4)
+
+# put the new builded cluster to dataframe
+hero.df.new$cluster <- as.factor(hero.clus$cluster)
+```
+## Cluster analysis
+
+Let's make a 3d plot to see how our heroes clustered by its base stats
+```{r warning=FALSE, message=FALSE}
+# run the plot with `plotly` package to make it interactive
+library(plotly)
+plot1 <- plot_ly(data=hero.df.new, x= ~base_str, y= ~base_agi, z= ~base_int,
+                 color = ~cluster, hoverinfo = 'text', text = ~paste(
+                   "</br> Hero_name: ",localized_name,
+                   "</br> str: ", base_str,
+                   "</br> agi: ", base_agi,
+                   "</br> int: ", base_int)) %>% 
+  add_markers() %>% layout(scene = list(xaxis = list(title = "base_str"),
+                                        yaxis = list(title = "base_agi"),
+                                        zaxis = list(title = "base_int")))
+
+plot1
+# Feel free to hover around and see your favourite horoes is grouped with which heroes
+```
+
+there's no clear distinction on each cluster based on their base stats. Cluster 2,3, and 4 are mostly cluster of heroes based on their primary_attribut. But cluster 1 have the combination of all atribut. Cluster 1 placed in center means that their base stats are on average of all heroes. Cluster 1 are the best heroes to pick when your team need some balancing in a terms of attribut.
+
+
+Clusters based on heroe's passive attribute
+```{r}
+hero.df.new %>% group_by(cluster) %>%
+  select(cluster, base_health_regen, base_armor, base_mr,base_attack_max,base_attack_min,
+         attack_range, projectile_speed, attack_rate, move_speed, turn_rate) %>%
+  summarise_if(is.numeric, "mean") %>%
+  mutate_if(is.numeric, .funs = "round", digits=3)
+```
+- as we can see, `cluster 1` have the highest base_armor, and slow move_speed. But overall, `cluster 1` have the average value attribute. if we add our previous analysis from primary attribute, we can conclude that `maybe` most heroes in `cluster 1` are `durable` (tanky) from all existing primary attributes.   
+- `cluster 2` however has many characteristics of int heroes, for example: lowest base_armor and health regen (because most of int heroes focus on mana than health), low_base attack, and highest attack range (because most of int heroes are ranged attack tpye). If only we have mana_regen or mana_skill_consumption kind of variables, i believe we can seperate heroes cluster even better   
+- `cluster 3` is a cluster for agi heroes. we can see that from low base armor, low attack, but high projectile_speed and attack rate since agi heroes are very dependent on speed. (note: low attack_rate mean higher attack speed. attack_rate indicates how many attack are happen in one second). But somehow `cluster 3` have the highest base_health_regen which i thought i should be in str heroes.   
+- `cluster 4` have many characteristics of str heroes. high armor, base attack, and attack rate. str heroes depend on armor and health but low speed and mostly are melee attack type. Everything are summarized on the table above.    
+
+
+After that, lets see how our clusters seperate heroes based on their role
+```{r}
+hero.df.new %>% group_by(cluster) %>%
+  select(21:30) %>%
+  summarise_if(is.numeric, "mean") %>%
+  mutate_if(is.numeric, .funs = "round", digits=3)
+
+```
+-  `cluster 1`: have the highest amount of disabler and jungler heroes, but have lowest carry. also have high support and initiator. i can say that heroes in `cluster 1` are mostly semi-support hero who help carry to kill enemies and initiate battle
+- `cluster 2`: have the lowest durable and initiator but have the most support and apparently all of them are nuker heroes. its also match to int characteristics where most of support heroes are form int 
+- `cluster 3`: have the highest carry, escape, and pusher but low disabler, support, jungler, and initiator. looks like heroes in `cluster 3` are meant to kill enemies
+- `cluster 4`: have the highest disabler, durable, and initiator. In the game, heroes in `cluster 4` are most likely who will start the clash/battle and also trying to disturb enemies.
+
+
+# Principal Component Analysis (PCA)
+
+Another well-known unsupervised method is Principal Component Analysis or PCA. PCA looks for correlation within our data and use that redundancy to create a new matrix with just enough dimensions to explain most of the variance in the original data. New variables that are created by PCA is called *principal component*. PCA can be used for `dimensionality reduction`, pattern discovery, Identify variables that are highly correlated with others and Visualizing high dimensional data.
+
+But not all data are suitable for PCA. first of all, it need lots of variables (dimensions). our data only have 29 variables, Is it enough? well i don't know. Uncorrelated variables are bad for pca (also known as *blind tasting*), so if our data have lots of correlated data (*Logistic Machinery*), we are good to do PCA.
+
+## Shall we do the PCA?
+```{r}
+# Correlation check
+cor(hero.df.new[,4:29])
+```
+
+it turns out our data have a very low correlation but some variables like `str/agi/int base` are correlated to `str/agi/int gain`. `rolesCarry` also have negative influence to `rolesSupport.` It make sense since it is very rare for carry to be a support and vice versa. The presence of carry roles can explain support roles as well as str/agi/int base to str/agi/int gain. It'll make `multicolinearity` if we do supervised learning and to avoid that, lets make PCA.
+
+## Build and intepret PCA
+```{r}
+# we need to scale our numeric data first and seperate cateogirc with numeric variable
+# remove localized name and cluster
+for.pca <- hero.df.new[,-c(1,30)]
+for.pca <- for.pca %>% mutate_if(is.numeric, .funs = "scale")
+```
+
+```{r}
+# build pca and draw the plot
+pca1 <- PCA(for.pca, quali.sup = c(1:2), graph = F)
+summary(pca1)
+```
+From the summary above, we need 15 dimensions to cover 86% variance of data.
+
+```{r}
+plot.PCA(pca1, choix = "ind", invisible = "quali", habillage = 1, col.hab = c("green","blue","red"))
+```
+
+Dim 1 only cover 17.78% variance of data and dim 2 only 13.78%. That's kinda low, i was expect something like more than 30% in Dim 1. lets visualize the percentages of variance covered by each pca
+
+```{r}
+fviz_eig(pca1, ncp = 20, addlabel = T,
+         main="Variance covered by each PC/dimensions\n")
+```
+
+PC 1 and 2 combined only covers 31% approx. if we combine 10 first dimension, it covers 71.8% information of our data. Surely we can reduce the numbers of variables of our data for future supervised learning but the changes are not significant since our data has low multicolinearty in the first place.
+
+
+Let's see how each numeric variables are covered by pca
+```{r}
+fviz_pca_biplot(pca1, repel = T, habillage = 1, invisible = "quali")
+```
+we can see that PC 1 and 2 are not enough to picture our data clearly (it only covers 31% anyway). But we have some interesting insight here where the difference of 3 primary attr can be explained by PC 1 and 2. All of the attr have negative influence to each other but not so significant. 
+
+From the plot we can see what variables are contribute to what dimension/PC from the plot above. For more clearer insight, lets draw a plot to see what variables contribute to both PC. 
+
+```{r}
+fviz_contrib(pca1, choice = "var", axes = 1)
+fviz_contrib(pca1, choice = "var", axes = 2)
+```
+
+From the plot above, we know that `str_gain` have the highest contribution to PC 1. In PC 2, `agi_gain` and `int_gain` have the highest contribution. Red line in the plot indicates average contribution on each pc. if we take variables that contribute above average line, almost every variables are contribute against each PC (for example: `str_gain` have high contribution to PC 1 but low in PC 2. `roles carry` have high contribution in PC 2 but very low in PC 1. some variables like `int_gain` have high contribution in both PC tho), It means the PC have succesfuly seperated our data in the terms of `contribution` since PC 2 are made from a line that perpendicular to PC 1.
+
+## Combining PCA and Clustering
+Let's see how our cluster distributed in PCA
+```{r}
+# rebuild PCA. this time we include cluster
+for.pca2 <- cbind(for.pca, cluster = hero.df.new$cluster)
+# build PCA
+pca2 <- PCA(for.pca2, quali.sup = c(1,2,29), graph = F)
+```
+
+```{r}
+fviz_cluster(object = hero.clus, data = for.pca2[,-c(1,2,29)], show.clust.cent = T) + theme_bw()
+plot.PCA(pca2, choix = "ind", invisible = "quali", habillage = 29)
+fviz_pca_biplot(pca2, repel = T, habillage = 29, invisible = "quali")
+```
+
+From the plots we can conclude that:
+* **note**: remember. this conclusion are made by **only** 31% of data.   
+- `cluster 4` and `cluster 2`  are somewhat similiar   
+- heroes in `cluster 1` are the most unique    
+- `cluster 1` are the opposite of `cluster 4`   
+- heroes in `cluster 1` are highly contributed by variables rolesSupport, int_gain, base_int, attack_range, and rolesNuker   
+- heroes in `cluster 2` are highly contributed by variables base_attack_max/min, base_str, str_gain, attack_rate, rolesDisabler, rolesInitiator, and rolesDurable.   
+- heroes in `cluster 3` are highly contributed by variables base_agi, agi_gain, rolesCarry, rolesEscape, base_mr, and move_speed, rolesPusher   
+- heres in `cluster 4` are highly contributed by base_healh_regen, turn_rate, and base_armor.   
+
+those conclusion made by intepretaion from PC 1 and PC 2 which only portrayed 31% of data. **it's hard to intepret conclusion by only 2 PC** because i'm afraid it will be misleading. So from the analysis, i can conclude that **Dota2 heroes data are not suitable to be analyzed with PCA**.
+
+
+lastly, lets convert our PCA to df
+```{r}
+df.pca <- data.frame(pca2$ind$coord[,1:5])
+df.pca <- cbind(df.pca, cluster = hero.df.new$cluster, hero = hero.df.new$localized_name)
+```
+
+* **bonus**: Here if you want to take a look how heroes cluster distributed in PC 1,2 and 3 (only portrayed 38.3% data)
+```{r}
+plot2 <- plot_ly(data=df.pca, x= ~Dim.1, y= ~Dim.2, z= ~Dim.3,
+                 color = ~cluster, hoverinfo = 'text', text = ~paste(
+                   "</br> Hero_name: ",hero,
+                   "</br> Dim.1: ", Dim.1,
+                   "</br> Dim.2: ", Dim.2,
+                   "</br> Dim.3: ", Dim.3)) %>% 
+  add_markers() %>% layout(scene = list(xaxis = list(title = "Dim.1"),
+                                        yaxis = list(title = "Dim.2"),
+                                        zaxis = list(title = "Dim.3")))
+
+plot2
+```
+
+# Conclusion
+Finally, here's some insight we can get from unsupervised learning for Dota2 heroes data:
+- There's no clear distinction on each cluster based on their base stats, but there's slightly different based on their roles and primary attribute   
+- `cluster 1` are the only unique cluster made from combination of all hero's primary attribute, meanwhile `cluster 2-4` have many characteristics with intelligence, agility, strength primarry attribute sequentially   
+- We need 15 dimensions to cover 86% variance of data, or 26 dimensions to cover all data. It means if we use all the PC to reduce dimensionality of our main data, we only do 13% variable reduction (1 - (total.dimension/total.actual.variable)*100)   
+- Or if 80% variance of data is enough for you, we only need 13 dimensions, which mean we're able to reduce 50% varible to still retain 80% of data. (1 - (15/30)*100)   
+- It's hard to intepret conclusion by only 2 first PC. We still need a lot of dimensions to summarize our data clearly. Thus, **Dota2 heroes data are not suitable to be analyzed with PCA**.   
+
+
+Thank you !
+   
+![Shadow Fiend by chroneco](sf1.png)
