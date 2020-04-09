@@ -6,8 +6,8 @@ This project is based on an old Kaggle competition. The training set consists of
 Code updated file:
 
 Dota science #1: Classification (Logistic Regression and KNN)
-    - forRpubs2
-    - mk3
+- forRpubs2
+- mk3
 
 Dota science #2: Unsupervised leraning (Clustering with K-means and Principal Component Analysis)
 - mk4-ul
